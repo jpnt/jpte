@@ -1,18 +1,18 @@
-#include <xcb/xproto.h>
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <sys/select.h>
-#include <pty.h>
-#include <libtsm.h>
-#include <xcb/xcb.h>
-#include <xcb/xcb_keysyms.h>
+#include <stdint.h>		/* uint32_t, uint8_t, etc. */
+#include <stdio.h>		/* fopen(), fread(), printf() */
+#include <stdlib.h>		/* malloc(), free(), exit() */
+#include <string.h>		/* memset(), memcpy(), strlen() */
+#include <unistd.h>		/* fork(), exec(), close() */
+#include <sys/select.h>		/* select() */
+#include <pty.h>		/* forkpty(), openpty() */
+#include <libtsm.h>		/* tsm_vte_new(), tsm_vte_input(), tsm_screen_draw() */
+
+#include <xcb/xcb.h>		/* xcb_connect(), xcb_create_window(), xcb_flush() */
+#include <xcb/xcb_keysyms.h>	/* xcb_key_symbols_alloc(), xcb_key_symbols_get_keysym() */
+#include <xcb/xproto.h>		/* xcb_create_window(), xcb_change_property(), xcb_put_image() */
 
 #include "config.h"
 
@@ -23,14 +23,56 @@ xcb_connection_t *conn;
 xcb_screen_t *screen;
 xcb_window_t window;
 xcb_gcontext_t gc;
-xcb_font_t font;
 xcb_key_symbols_t *keysyms;
+stbtt_fontinfo fontinfo;
 
 #ifdef DEBUG
 #define debug_print(...)	fprintf(stderr, __VA_ARGS__);
 #else
 #define debug_print(...)	;
 #endif
+
+/* static */
+/* void load_font(const char *font_path) */
+/* { */
+/* 	FILE *font_file = fopen(font_path, "rb"); */
+/* 	if (font_file == NULL) { */
+/* 		perror("load_font: fopen"); */
+/* 		exit(1); */
+/* 	} */
+/* 	fread(font_buffer, 1, sizeof(font_buffer), font_file); */
+/* 	fclose(font_file); */
+/*  */
+/* 	stbtt_InitFont(&fontinfo, font_buffer, stbtt_GetFontOffsetForIndex(font_buffer, 0)); */
+/* } */
+
+/* static */
+/* void rasterize_font(int width, int height) */
+/* { */
+/* 	unsigned char *bitmap = (unsigned char *)malloc(width * height); */
+/* 	// WARNING USE OF MALLOC !!!!!!!! */
+/* 	stbtt_BakeFontBitmap(font_buffer, 0, JPTE_FONT_SIZE, bitmap, width, height, 32, 96, NULL); */
+/*  */
+/* 	// when do/should we free? */
+/* 	free(bitmap); */
+/* } */
+
+/* static */
+/* void draw_bitmap(xcb_connection_t* conn, xcb_window_t window, xcb_image_t* image) { */
+/* 	xcb_gcontext_t gc = xcb_generate_id(conn); */
+/* 	uint32_t value_list[] = {XCB_COLOR_CELL}; */
+/* 	xcb_create_gc(conn, gc, window, XCB_GC_FOREGROUND, value_list); */
+/*  */
+/* 	xcb_put_image(conn, XCB_IMAGE_FORMAT_Z_PIXMAP, window, gc, image->width, image->height, 0, 0, 0, XCB_IMAGE_FORMAT_Z_PIXMAP, XCB_IMAGE_FORMAT_XY_PIXMAP, image->data); */
+/*  */
+/* 	xcb_flush(conn); */
+/* } */
+
+/* static */
+/* xcb_image_t* create_image(xcb_connection_t* conn, int width, int height, unsigned char* bitmap) { */
+/* 	xcb_image_t* image = xcb_image_create(width, height, XCB_IMAGE_FORMAT_Z_PIXMAP, XCB_IMAGE_FORMAT_XY_PIXMAP, 24, 8, width, height, bitmap); */
+/* 	return image; */
+/* } */
 
 /* Render a single glyph */
 /* void render_glyph(stbtt_fontinfo *font, int size, unsigned char *bitmap, int *width, int *height) */
@@ -57,6 +99,8 @@ xcb_key_symbols_t *keysyms;
 /* 	stbtt_InitFont(font, font_buffer, stbtt_GetFontOffsetForIndex(font_buffer, 0)); */
 /* } */
 
+
+
 /* Writes data to the master file descriptor and prints debug information */
 static void write_cb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 {
@@ -67,14 +111,14 @@ static void write_cb(struct tsm_vte *vte, const char *u8, size_t len, void *data
 }
 
 /* Feeds terminal output into the VTE */
-void handle_output(const char *buffer, size_t length)
+static void handle_output(const char *buffer, size_t length)
 {
 	tsm_vte_input(vte, buffer, length);
 	debug_print("handle_output: %.*s\n", (int)length, buffer);
 }
 
 /* Draws text on the XCB window */
-void draw_text(xcb_drawable_t drawable, xcb_gcontext_t gc, int16_t x, int16_t y,
+static void draw_text(xcb_drawable_t drawable, xcb_gcontext_t gc, int16_t x, int16_t y,
 		const char *text)
 {
 	xcb_image_text_8(conn, strlen(text), drawable, gc, x, y, text);
@@ -83,16 +127,10 @@ void draw_text(xcb_drawable_t drawable, xcb_gcontext_t gc, int16_t x, int16_t y,
 }
 
 /* Callback function for drawing characters */
-int draw_cb(struct tsm_screen *con,
-		uint64_t id,
-		const uint32_t *ch,
-		size_t len,
-		unsigned int width,
-		unsigned int posx,
-		unsigned int posy,
-		const struct tsm_screen_attr *attr,
-		tsm_age_t age,
-		void *data)
+static inline int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch,
+			size_t len, unsigned int width, unsigned int posx,
+			unsigned int posy, const struct tsm_screen_attr *attr,
+			tsm_age_t age, void *data)
 {
 	(void)con;
 	(void)id;
@@ -104,7 +142,6 @@ int draw_cb(struct tsm_screen *con,
 
 	char buf[5] = {0};
 	int bytes = tsm_ucs4_to_utf8(*ch, buf);
-	//debug_print("draw_cb: tsm_tcs4_to_utf8(%d, %s): result: %d\n", *ch, buf, bytes);
 	buf[bytes] = '\0';
 	if (bytes > 0 && buf[0] != '\0') {
 		draw_text(window, gc, posx * 10, posy * 20, buf);
@@ -113,7 +150,7 @@ int draw_cb(struct tsm_screen *con,
 }
 
 /* Clears the screen and redraws it using `tsm_screen_draw` */
-void draw_screen()
+static void draw_screen()
 {
 	xcb_clear_area(conn,
 			0,	/* exposures */
@@ -123,7 +160,7 @@ void draw_screen()
 			screen->height_in_pixels);
 
 	tsm_screen_draw(tsm_screen,	/* connection */
-			draw_cb,	/* draw context buffer */
+			draw_cb,	/* draw callback */
 			NULL);		/* data */
 
 	xcb_flush(conn);
@@ -131,7 +168,7 @@ void draw_screen()
 }
 
 /* Handles key press events, sends input to the VTE and the shell */
-void handle_key_press(xcb_key_press_event_t *kp)
+static void handle_key_press(xcb_key_press_event_t *kp)
 {
 	char buf[32];
 	xcb_keysym_t keysym = xcb_key_symbols_get_keysym(keysyms, kp->detail, 0);
@@ -145,7 +182,7 @@ void handle_key_press(xcb_key_press_event_t *kp)
 }
 
 /* Processes XCB events and handles terminal output */
-void event_loop()
+static void event_loop()
 {
 	fd_set fds;
 	int xcb_fd = xcb_get_file_descriptor(conn);
@@ -190,7 +227,7 @@ void event_loop()
 }
 
 /* Initializes XCB and creates a window */
-void setup_xcb()
+static void setup_xcb()
 {
 	conn = xcb_connect(NULL, NULL);
 	if (xcb_connection_has_error(conn)) {
@@ -230,9 +267,9 @@ void setup_xcb()
 	uint32_t value_list_gc[] = {screen->black_pixel, screen->white_pixel};
 	xcb_create_gc(conn, gc, window, value_mask, value_list_gc);
 
-	font = xcb_generate_id(conn);
-	xcb_open_font(conn, font, strlen("fixed"), "fixed");
-	xcb_change_gc(conn, gc, XCB_GC_FONT, &font);
+	//font = xcb_generate_id(conn);
+	//xcb_open_font(conn, font, strlen("fixed"), "fixed");
+	//xcb_change_gc(conn, gc, XCB_GC_FONT, &font);
 
 	keysyms = xcb_key_symbols_alloc(conn);
 	if (!keysyms) {
@@ -243,7 +280,7 @@ void setup_xcb()
 }
 
 /* Initializes TSM (Terminal State Machine) */
-void setup_tsm()
+static void setup_tsm()
 {
 	if (tsm_screen_new(&tsm_screen, NULL, NULL) != 0) {
 		fprintf(stderr, "error: failed to create TSM screen\n");
@@ -257,7 +294,7 @@ void setup_tsm()
 }
 
 /* Spawns the shell in a pseudo-terminal */
-void spawn_shell()
+static void spawn_shell()
 {
 	pid_t pid = forkpty(&ptty_fd, NULL, NULL, NULL);
 	if (pid == -1) {
@@ -270,12 +307,11 @@ void spawn_shell()
 			exit(EXIT_FAILURE);
 		}
 	}
-	// TODO: waitpid here?
 	debug_print("spawn_shell: done\n");
 }
 
 /* Frees resources before exiting */
-void cleanup(void)
+static void cleanup(void)
 {
 	xcb_key_symbols_free(keysyms);
 	xcb_disconnect(conn);
@@ -288,6 +324,7 @@ int main(void)
 {
 	setup_tsm();
 	setup_xcb();
+	//setup_stbtt();
 	spawn_shell();
 	event_loop();
 	cleanup();
