@@ -1,9 +1,9 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define JPTE_SHELL		"/bin/loksh"
+#define JPTE_SHELL		"/bin/sh"
 #define JPTE_FONT_PATH		"/usr/share/fonts/TTF/DejaVuSansMono.ttf"
-#define JPTE_FONT_SIZE		10
+#define JPTE_FONT_SIZE		16
 #define JPTE_SAVE_LINES		4096
 #define JPTE_TRANSPARENT	1
 #define JPTE_SHADING		50

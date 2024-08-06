@@ -1,20 +1,25 @@
-#define STB_TRUETYPE_IMPLEMENTATION
-#include "stb_truetype.h"
-
 #include <stdint.h>		/* uint32_t, uint8_t, etc. */
 #include <stdio.h>		/* fopen(), fread(), printf() */
-#include <stdlib.h>		/* malloc(), free(), exit() */
+#include <stdlib.h>		/* exit(), malloc(), free() */
 #include <string.h>		/* memset(), memcpy(), strlen() */
 #include <unistd.h>		/* fork(), exec(), close() */
 #include <sys/select.h>		/* select() */
 #include <pty.h>		/* forkpty(), openpty() */
 #include <libtsm.h>		/* tsm_vte_new(), tsm_vte_input(), tsm_screen_draw() */
-
 #include <xcb/xcb.h>		/* xcb_connect(), xcb_create_window(), xcb_flush() */
 #include <xcb/xcb_keysyms.h>	/* xcb_key_symbols_alloc(), xcb_key_symbols_get_keysym() */
 #include <xcb/xproto.h>		/* xcb_create_window(), xcb_change_property(), xcb_put_image() */
 
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
+
 #include "config.h"
+
+#ifdef DEBUG
+#define debug_print(...)	fprintf(stderr, __VA_ARGS__);
+#else
+#define debug_print(...)	;
+#endif
 
 int ptty_fd;
 struct tsm_vte *vte;
@@ -24,82 +29,68 @@ xcb_screen_t *screen;
 xcb_window_t window;
 xcb_gcontext_t gc;
 xcb_key_symbols_t *keysyms;
-stbtt_fontinfo fontinfo;
+stbtt_fontinfo font_info;
 
-#ifdef DEBUG
-#define debug_print(...)	fprintf(stderr, __VA_ARGS__);
-#else
-#define debug_print(...)	;
-#endif
+typedef struct {
+	unsigned char *bitmap;
+	int width, height;
+	int x_offset, y_offset;
+	int x_advance;
+} GlyphInfo;
 
-/* static */
-/* void load_font(const char *font_path) */
-/* { */
-/* 	FILE *font_file = fopen(font_path, "rb"); */
-/* 	if (font_file == NULL) { */
-/* 		perror("load_font: fopen"); */
-/* 		exit(1); */
-/* 	} */
-/* 	fread(font_buffer, 1, sizeof(font_buffer), font_file); */
-/* 	fclose(font_file); */
-/*  */
-/* 	stbtt_InitFont(&fontinfo, font_buffer, stbtt_GetFontOffsetForIndex(font_buffer, 0)); */
-/* } */
+#define MAX_GLYPHS 128
+GlyphInfo glyphs[MAX_GLYPHS];
 
-/* static */
-/* void rasterize_font(int width, int height) */
-/* { */
-/* 	unsigned char *bitmap = (unsigned char *)malloc(width * height); */
-/* 	// WARNING USE OF MALLOC !!!!!!!! */
-/* 	stbtt_BakeFontBitmap(font_buffer, 0, JPTE_FONT_SIZE, bitmap, width, height, 32, 96, NULL); */
-/*  */
-/* 	// when do/should we free? */
-/* 	free(bitmap); */
-/* } */
+static void load_glyphs(void) 
+{
+	for (int i = 0; i < MAX_GLYPHS; ++i) {
+		int width, height, x_offset, y_offset;
+		unsigned char *bitmap = stbtt_GetCodepointBitmap(&font_info, 0,
+				stbtt_ScaleForPixelHeight(&font_info, JPTE_FONT_SIZE),
+				i, &width, &height, &x_offset, &y_offset);
 
-/* static */
-/* void draw_bitmap(xcb_connection_t* conn, xcb_window_t window, xcb_image_t* image) { */
-/* 	xcb_gcontext_t gc = xcb_generate_id(conn); */
-/* 	uint32_t value_list[] = {XCB_COLOR_CELL}; */
-/* 	xcb_create_gc(conn, gc, window, XCB_GC_FOREGROUND, value_list); */
-/*  */
-/* 	xcb_put_image(conn, XCB_IMAGE_FORMAT_Z_PIXMAP, window, gc, image->width, image->height, 0, 0, 0, XCB_IMAGE_FORMAT_Z_PIXMAP, XCB_IMAGE_FORMAT_XY_PIXMAP, image->data); */
-/*  */
-/* 	xcb_flush(conn); */
-/* } */
+		int advance_width, lsb;
+		stbtt_GetCodepointHMetrics(&font_info, i, &advance_width, &lsb);
 
-/* static */
-/* xcb_image_t* create_image(xcb_connection_t* conn, int width, int height, unsigned char* bitmap) { */
-/* 	xcb_image_t* image = xcb_image_create(width, height, XCB_IMAGE_FORMAT_Z_PIXMAP, XCB_IMAGE_FORMAT_XY_PIXMAP, 24, 8, width, height, bitmap); */
-/* 	return image; */
-/* } */
+		glyphs[i].bitmap = bitmap;
+		glyphs[i].width = width;
+		glyphs[i].height = height;
+		glyphs[i].x_offset = x_offset;
+		glyphs[i].y_offset = y_offset;
+		glyphs[i].x_advance = advance_width;
+	}
+}
 
-/* Render a single glyph */
-/* void render_glyph(stbtt_fontinfo *font, int size, unsigned char *bitmap, int *width, int *height) */
-/* { */
-/* 	int x, y; */
-/* 	//TODO: Render the first glyph in the font??? What does the next line do idk */
-/* 	bitmap = stbtt_GetCodepointBitmap(font, 0, size, 'A', width, height, &x, &y); */
-/* } */
+/* Initialize stb_truetype and load glyphs */
+static void setup_stbtt(void)
+{
+	FILE *font_file = fopen(JPTE_FONT_PATH, "rb");
+	if (!font_file) {
+		perror("setup_stbtt: fopen");
+		exit(EXIT_FAILURE);
+	}
+	size_t font_size = fread(font_buffer, 1, sizeof(font_buffer), font_file);
+	fclose(font_file);
+	if (font_size <= 0) {
+		fprintf(stderr, "setup_stbtt: failed to read font file\n");
+		exit(EXIT_FAILURE);
+	}
+	if (!stbtt_InitFont(&font_info, font_buffer,
+				stbtt_GetFontOffsetForIndex(font_buffer, 0))) {
+		fprintf(stderr, "setup_stbtt: failed to initialize font\n");
+		exit(EXIT_FAILURE);
+	}
+	load_glyphs();
 
-/* Load font data */
-/* void load_font(const char *font_path, stbtt_fontinfo *font) */
-/* { */
-/* 	FILE *file = fopen(font_path, "rb"); */
-/* 	if (!file) { */
-/* 		perror("fopen"); */
-/* 		exit(EXIT_FAILURE); */
-/* 	} */
-/* 	fseek(file, 0, SEEK_END); */
-/* 	long font_size = ftell(file); */
-/* 	fseek(file, 0, SEEK_SET); */
-/* 	unsigned char *font_buffer = (unsigned char *)malloc(font_size); //TODO: I will need to free this later right??? */
-/* 	fread(font_buffer, 1, font_size, file); */
-/* 	fclose(file); */
-/* 	stbtt_InitFont(font, font_buffer, stbtt_GetFontOffsetForIndex(font_buffer, 0)); */
-/* } */
+	debug_print("setup_stbtt: done\n");
+}
 
-
+static void free_glyphs(void)
+{
+	for (int i = 0; i < MAX_GLYPHS; ++i) {
+		free(glyphs[i].bitmap);
+	}
+}
 
 /* Writes data to the master file descriptor and prints debug information */
 static void write_cb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
@@ -117,13 +108,33 @@ static void handle_output(const char *buffer, size_t length)
 	debug_print("handle_output: %.*s\n", (int)length, buffer);
 }
 
-/* Draws text on the XCB window */
-static void draw_text(xcb_drawable_t drawable, xcb_gcontext_t gc, int16_t x, int16_t y,
-		const char *text)
+static void draw_glyph(xcb_drawable_t drawable, xcb_gcontext_t gc, int16_t x, int16_t y, GlyphInfo *glyph)
 {
-	xcb_image_text_8(conn, strlen(text), drawable, gc, x, y, text);
+	for (int j = 0; j < glyph->height; ++j) {
+		for (int i = 0; i < glyph->width; ++i) {
+			if (glyph->bitmap[j * glyph->width + i]) {
+				xcb_point_t point = {x + i + glyph->x_offset, y + j + glyph->y_offset};
+				xcb_poly_point(conn, XCB_COORD_MODE_ORIGIN, drawable, gc, 1, &point);
+			}
+		}
+	}
 	xcb_flush(conn);
-	debug_print("draw_text: '%s' at (%d, %d)\n", text, x, y);
+}
+
+/* Draws text on the XCB window */
+static void draw_text(xcb_drawable_t drawable, xcb_gcontext_t gc, int16_t x, int16_t y, const char *text)
+{
+	/* xcb_image_text_8(conn, strlen(text), drawable, gc, x, y, text); */
+	/* xcb_flush(conn); */
+	/* debug_print("draw_text: '%s' at (%d, %d)\n", text, x, y); */
+	 while (*text) {
+		 int codepoint = *text++;
+		 if (codepoint < MAX_GLYPHS) {
+			 GlyphInfo *glyph = &glyphs[codepoint];
+			 draw_glyph(drawable, gc, x, y, glyph);
+			 x += glyph->x_advance;
+		 }
+	 }
 }
 
 /* Callback function for drawing characters */
@@ -182,7 +193,7 @@ static void handle_key_press(xcb_key_press_event_t *kp)
 }
 
 /* Processes XCB events and handles terminal output */
-static void event_loop()
+static void event_loop(void)
 {
 	fd_set fds;
 	int xcb_fd = xcb_get_file_descriptor(conn);
@@ -200,7 +211,6 @@ static void event_loop()
 			perror("event_loop: select");
 			break;
 		}
-
 		if (FD_ISSET(xcb_fd, &fds)) {
 			while ((event = xcb_poll_for_event(conn))) {
 				switch (event->response_type & ~0x80) {
@@ -227,14 +237,13 @@ static void event_loop()
 }
 
 /* Initializes XCB and creates a window */
-static void setup_xcb()
+static void setup_xcb(void)
 {
 	conn = xcb_connect(NULL, NULL);
 	if (xcb_connection_has_error(conn)) {
 		fprintf(stderr, "error: unable to open X display\n");
 		exit(EXIT_FAILURE);
 	}
-
 	const xcb_setup_t *setup = xcb_get_setup(conn);
 	xcb_screen_iterator_t iter = xcb_setup_roots_iterator(setup);
 	screen = iter.data;
@@ -264,7 +273,7 @@ static void setup_xcb()
 
 	gc = xcb_generate_id(conn);
 	uint32_t value_mask = XCB_GC_FOREGROUND | XCB_GC_BACKGROUND;
-	uint32_t value_list_gc[] = {screen->black_pixel, screen->white_pixel};
+	uint32_t value_list_gc[] = {screen->white_pixel, screen->black_pixel};
 	xcb_create_gc(conn, gc, window, value_mask, value_list_gc);
 
 	//font = xcb_generate_id(conn);
@@ -280,7 +289,7 @@ static void setup_xcb()
 }
 
 /* Initializes TSM (Terminal State Machine) */
-static void setup_tsm()
+static void setup_tsm(void)
 {
 	if (tsm_screen_new(&tsm_screen, NULL, NULL) != 0) {
 		fprintf(stderr, "error: failed to create TSM screen\n");
@@ -294,8 +303,9 @@ static void setup_tsm()
 }
 
 /* Spawns the shell in a pseudo-terminal */
-static void spawn_shell()
+static void spawn_shell(void)
 {
+	/* forkpty() combines openpty(), fork(2) and loginpty() */
 	pid_t pid = forkpty(&ptty_fd, NULL, NULL, NULL);
 	if (pid == -1) {
 		perror("forkpty");
@@ -317,14 +327,17 @@ static void cleanup(void)
 	xcb_disconnect(conn);
 	tsm_vte_unref(vte);
 	tsm_screen_unref(tsm_screen);
+	free_glyphs();
 	debug_print("cleanup: done\n");
 }
 
 int main(void)
 {
+	// TODO: getopt, sigaction
+
+	setup_stbtt();
 	setup_tsm();
 	setup_xcb();
-	//setup_stbtt();
 	spawn_shell();
 	event_loop();
 	cleanup();
