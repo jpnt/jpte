@@ -41,6 +41,24 @@ typedef struct {
 #define MAX_GLYPHS 128
 GlyphInfo glyphs[MAX_GLYPHS];
 
+/* Helper function to print the error and exit */
+static void die(const char *fmt, ...) {
+	va_list ap;
+
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+
+	if (fmt[0] && fmt[strlen(fmt)-1] == ':') {
+		fputc(' ', stderr);
+		perror(NULL);
+	} else {
+		fputc('\n', stderr);
+	}
+
+	exit(1);
+}
+
 static void load_glyphs(void) 
 {
 	for (int i = 0; i < MAX_GLYPHS; ++i) {
@@ -66,19 +84,16 @@ static void setup_stbtt(void)
 {
 	FILE *font_file = fopen(JPTE_FONT_PATH, "rb");
 	if (!font_file) {
-		perror("setup_stbtt: fopen");
-		exit(EXIT_FAILURE);
+		die("setup_stbtt: fopen:");
 	}
 	size_t font_size = fread(font_buffer, 1, sizeof(font_buffer), font_file);
 	fclose(font_file);
 	if (font_size <= 0) {
-		fprintf(stderr, "setup_stbtt: failed to read font file\n");
-		exit(EXIT_FAILURE);
+		die("setup_stbtt: failed to read font file");
 	}
 	if (!stbtt_InitFont(&font_info, font_buffer,
 				stbtt_GetFontOffsetForIndex(font_buffer, 0))) {
-		fprintf(stderr, "setup_stbtt: failed to initialize font\n");
-		exit(EXIT_FAILURE);
+		die("setup_stbtt: failed to initialize font");
 	}
 	load_glyphs();
 
@@ -163,6 +178,7 @@ static inline int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *c
 /* Clears the screen and redraws it using `tsm_screen_draw` */
 static void draw_screen()
 {
+	// TODO: only draw required area
 	xcb_clear_area(conn,
 			0,	/* exposures */
 			window,	/* window id */
@@ -220,7 +236,10 @@ static void event_loop(void)
 				case XCB_KEY_PRESS:
 					handle_key_press((xcb_key_press_event_t *)event);
 					break;
+					// TODO: mouse press
 				default:
+					debug_print("event_loop: unhandled event type %u\n",
+							event->response_type);
 					break;
 				}
 			}
@@ -241,8 +260,7 @@ static void setup_xcb(void)
 {
 	conn = xcb_connect(NULL, NULL);
 	if (xcb_connection_has_error(conn)) {
-		fprintf(stderr, "error: unable to open X display\n");
-		exit(EXIT_FAILURE);
+		die("setup_xcb: unable to open X display");
 	}
 	const xcb_setup_t *setup = xcb_get_setup(conn);
 	xcb_screen_iterator_t iter = xcb_setup_roots_iterator(setup);
@@ -276,14 +294,14 @@ static void setup_xcb(void)
 	uint32_t value_list_gc[] = {screen->white_pixel, screen->black_pixel};
 	xcb_create_gc(conn, gc, window, value_mask, value_list_gc);
 
+	// TODO: do I need to setup anything here?
 	//font = xcb_generate_id(conn);
 	//xcb_open_font(conn, font, strlen("fixed"), "fixed");
 	//xcb_change_gc(conn, gc, XCB_GC_FONT, &font);
 
 	keysyms = xcb_key_symbols_alloc(conn);
 	if (!keysyms) {
-		fprintf(stderr, "error: unable to allocate key symbols\n");
-		exit(EXIT_FAILURE);
+		die("setup_xcb: unable to allocate key symbols");
 	}
 	debug_print("setup_xcb: done\n");
 }
@@ -292,12 +310,10 @@ static void setup_xcb(void)
 static void setup_tsm(void)
 {
 	if (tsm_screen_new(&tsm_screen, NULL, NULL) != 0) {
-		fprintf(stderr, "error: failed to create TSM screen\n");
-		exit(EXIT_FAILURE);
+		die("setup_tsm: failed to create TSM screen");
 	}
 	if (tsm_vte_new(&vte, tsm_screen, write_cb, NULL, NULL, NULL) != 0) {
-		fprintf(stderr, "error: failed to create TSM VTE\n");
-		exit(EXIT_FAILURE);
+		die("setup_tsm: failed to create TSM VTE");
 	}
 	debug_print("setup_tsm: done\n");
 }
@@ -308,13 +324,11 @@ static void spawn_shell(void)
 	/* forkpty() combines openpty(), fork(2) and loginpty() */
 	pid_t pid = forkpty(&ptty_fd, NULL, NULL, NULL);
 	if (pid == -1) {
-		perror("forkpty");
-		exit(EXIT_FAILURE);
+		die("spawn_shell: forkpty:");
 	}
 	if (pid == 0) {
 		if (execlp(JPTE_SHELL, JPTE_SHELL, NULL) != 0) {
-			perror("execlp");
-			exit(EXIT_FAILURE);
+			die("spawn_shell: execlp:");
 		}
 	}
 	debug_print("spawn_shell: done\n");
