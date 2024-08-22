@@ -1,6 +1,6 @@
-# Just a plain Terminal Emulator
+# jpte
 
-jpte is a minimal terminal emulator written in C99.
+jpte is a fast and minimal terminal emulator written in C99.
 
 ## Dependencies
 
@@ -14,14 +14,9 @@ jpte is a minimal terminal emulator written in C99.
     - [stb_truetype.h on GitHub](https://github.com/nothings/stb)
     - Public domain
 
-## Build
-```sh
-$ make
-```
-
 ## Install
 ```sh
-# make clean install
+$ sudo make clean install
 ```
 
 ## License
