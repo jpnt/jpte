@@ -197,14 +197,56 @@ static void draw_screen()
 /* Handles key press events, sends input to the VTE and the shell */
 static void handle_key_press(xcb_key_press_event_t *kp)
 {
-	char buf[32];
+	// TODO: handle backspace, alt, etc
+	///char buf[32];
+	///memset(buf, 0, sizeof(buf));
+	///xcb_keysym_t keysym = xcb_key_symbols_get_keysym(keysyms, kp->detail, 0);
+
+	///if (keysym) {
+	///	debug_print("handle_key_press: keysym %u\n", keysym);
+
+	///	int len = snprintf(buf, sizeof(buf), "%c", keysym);
+	///	buf[len] = '\0';
+	///	tsm_vte_handle_keyboard(vte, buf[0], 0, 0, 0);
+	///	write(ptty_fd, buf, len);
+
+	///	debug_print("handle_key_press: %s\n", buf);
+	///}
+	
+
+
+	// TODO: support unicode, this example is for 1 byte only characters
 	xcb_keysym_t keysym = xcb_key_symbols_get_keysym(keysyms, kp->detail, 0);
-	if (keysym) {
-		int len = snprintf(buf, sizeof(buf), "%c", keysym);
-		buf[len] = '\0';
+	if (!keysym) {
+		debug_print("handle_key_press: unknown keysym %u\n", kp->detail);
+		return;
+	}
+
+	char buf[4] = {0}; // UTF-8 encoding for single characters
+	int len = 0;
+
+	switch (keysym) {
+		// problem: where to define XCB_KEYSYM_BACKSPACE, XCB_KEYSYM_RETURN
+	//case XCB_KEYSYM_BACKSPACE:
+	//	buf[0] = '\x08'; // ASCII backspace
+	//	len = 1;
+	//	break;
+	//case XCB_KEYSYM_RETURN:
+	//	buf[0] = '\n';
+	//	len = 1;
+	//	break;
+	default:
+		if (keysym >= 32 && keysym <= 126) {
+			buf[0] = (char)keysym;
+			len = 1;
+		}
+		break;
+	}
+
+	if (len > 0) {
 		tsm_vte_handle_keyboard(vte, buf[0], 0, 0, 0);
 		write(ptty_fd, buf, len);
-		debug_print("handle_key_press: %s\n", buf);
+		debug_print("handle_key_press: %.*s\n", len, buf);
 	}
 }
 
@@ -247,8 +289,9 @@ static void event_loop(void)
 		}
 		if (FD_ISSET(ptty_fd, &fds)) {
 			n = read(ptty_fd, buf, sizeof(buf));
-			debug_print("read: %d bytes: buf '%s'\n", n, buf);
 			if (n <= 0) break;
+			buf[n] = '\0';
+			debug_print("read: %d bytes: buf '%s'\n", n, buf);
 			handle_output(buf, n);
 			draw_screen();
 		}
@@ -356,4 +399,5 @@ int main(void)
 	event_loop();
 	cleanup();
 	return 0;
+	//TODO: return retval;
 }

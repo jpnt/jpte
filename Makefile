@@ -2,23 +2,18 @@ VERSION = 0.0
 NAME = jpte
 
 PREFIX ?= /usr/local
-BINDIR ?= ${PREFIX}/bin
+DESTDIR ?=
 
-INCS = -I. -I${PREFIX}/include
+INCS = -I.
 LIBS = -lc -lm -lxcb -lxcb-keysyms -lxcb-render -lxcb-render-util -ltsm -lutil
 
 CC ?= gcc
-### Debug
-CFLAGS ?= -std=c99 -pedantic -Wall -Wextra -Og ${INCS} -DVERSION=\"${VERSION}\" -DDEBUG -g
-### Fast compilation speed
-#CFLAGS ?= -std=c99 -pipe ${INCS} -DVERSION=\"${VERSION}\"
-### Generic
-#CFLAGS ?= -std=c99 -pedantic -Wall -Wextra -Os ${INCS} -DVERSION=\"${VERSION}\"
-### Performance
-#CFLAGS ?= -std=c99 -pedantic -Wall -Wextra -Ofast -march=native -mtune=native -pipe ${INCS} -DVERSION=\"${VERSION}\"
+CFLAGS ?= -std=c99 -pedantic -Wall -Wextra -Og ${INCS} \
+	  -DVERSION=\"${VERSION}\" -DDEBUG -g
+#CFLAGS ?= -std=c99 -pedantic -Wall -Wextra -Ofast \
+#	-march=native -mtune=native -pipe ${INCS} \
+#	-DVERSION=\"${VERSION}\"
 LDFLAGS ?= ${LIBS}
-
-EXEC = ${NAME}
 
 SRC = ${NAME}.c
 OBJ = ${SRC:.c=.o}
@@ -26,7 +21,7 @@ OBJ = ${SRC:.c=.o}
 all: ${NAME}
 
 .c.o:
-	${CC} -c ${CFLAGS} $<
+	${CC} -c ${CFLAGS} $< -o $@
 
 ${OBJ}: config.h
 
@@ -45,4 +40,4 @@ install: all
 uninstall:
 	rm -fv ${DESTDIR}${PREFIX}/bin/${NAME}
 
-.PHONE: all clean install uninstall
+.PHONY: all clean install uninstall
